@@ -1,0 +1,1074 @@
+---
+title: "Planes and Politics: A Support Vector Approach to Classifying Changes in European Voting Behavior\n"
+author: "Aiden Pape and Alec Kyritsis"
+output:
+  html_document:
+    toc: true
+    toc_float: true       # Optional: Makes the table of contents float for better navigation
+    code_overflow: wrap   # Wraps long code lines
+    code_folding: show    # Foldable code chunks (use 'hide' to initially fold them)
+    self_contained: true  # Embeds resources like CSS/JS into the HTML
+    mathjax: default
+knitr:
+  opts_chunk:
+    warning: false        # Suppresses warnings in chunks
+    message: false        # Suppresses messages in chunks
+---
+
+```{r, include=FALSE, results = 'hide'}
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(gridExtra)
+library(rpart.plot)
+library(plotly)
+library(FNN)
+library(rpart)
+library(caret)
+library(ranger)
+library(xgboost)
+library(SHAPforxgboost)
+library(e1071)
+library(randomForest)
+library(kableExtra)
+```
+
+```{r, echo = FALSE}
+# silent function attic
+hot_encode <- function(X, categories)
+{ # add hot encoded columns
+  for (c in categories)
+  {
+    vals <- unique(X[,c])
+    if (length(vals) > 2)
+    {
+       X[,c] <- as.factor(X[,c])
+       X <- cbind(X, model.matrix(as.formula(paste("~", c, "- 1")), data = X))
+    }
+    else
+    {
+      X[,paste0(c, "_bool")] <- ifelse(X[, c] == vals[1], 1, 0)
+    }
+   
+  }
+  # clean up
+  for (c in categories)
+  {
+    X[,c] <- NULL
+  }
+  return(X)
+}
+```
+
+
+"Ideology is not a conceptual frame externally imposed on the wealth of reality, it is our experience of reality itself" - Slavoj Žižek.
+
+# Introduction
+
+The 2016 election of President Donald Trump marked a stark departure from status-quo. Broadly, it represented a shift in the political zeitgeist towards populism. Although a U.S. event, the so called "Trump Effect" has had sharp affects across the European continent. In this report, we restrict our analysis to directional changes in voting patterns in six E.U. member nations. We examine the most significant demographic factors that contribute to these changes. We also explore some of the mathematics that inform Support Vector Machines, and benchmark their performance against a Random Forest approach in our classification task.
+
+# A Painless Overview of Support Vector Machines
+
+Support Vector Machines (SVM's) are a powerful supervised machine learning tool. They work by finding a separating line or hyper planes that maximizes the distance between two classes, or the margin. This results in a decision rule that leads to lower misclassification rates on unseen data.  We give a brief, intuitive overview of how Linear Support Vector Machines work on binary classification tasks. We examine some of the mathematics that inform this procedure, however an unfamiliar reader will certainly be able to follow along.
+
+![figure 1: Seperating hyperplane in $n = 2$ feature space. Squares are positive labels. Circles are negative labels. Blue line is the maximal margin. Dashed, red lines represent support vectors. Solid red line is the seperating plane.](seperating_plane.png)
+
+To facilitate our discussion, it is useful to imagine two clusters of points in $n$-dimensional feature-space such that one is positioned relatively "higher" than the other. Suppose the first cluster has label $1$ and the second cluster has label $-1$. Formally, we have dataset
+
+$$ D = \{\;(x_i, y_i) \; : \; i = 1, ..., m\; x_i \in \mathbb{R}^n,\; y_i \in \{-1, 1\}\; \}.$$
+ 
+In other words, the tupple $(x_i, y_i)$ corresponds to an observation and its label for the $i^{th}$ observation in the dataset $D$. Suppose also that we may separate these clusters via some hyper plane; that is, the data is "linearly separable." In the case of $n = 2$, this means we may draw a line between the upper and lower cluster in $2D$.
+
+Now, an $n$-dimensional hyperplane $H$ is defined by solutions to the equation
+$$ w \cdot x + b = 0 $$
+where $w \in \mathbb{R}^n$ is vector normal to the plane, $x \in \mathbb{R}^n$ an arbitrary vector in $n$-dimensional space, and $b \in \mathbb{R}$. We may think of the normal vector $w$ as directing the "face" of $H$ while the constant $b$ scales the position of $H$ from the origin. A useful fact from linear algebra is that if vectors $y, z \in \mathbb{R}$ are oriented at an angle less than $90$ degrees then
+$$ y \cdot z = \sum_{i = 1}^n y_i z_i > 0 $$
+where $y \cdot z$ is the dot product operation. Returning to our clusters, this means that if there exists a separating hyperplane $H$, then it should be able to satisfy
+$$ w \cdot x_i + b > 0 \; \text{if} \; y_i = 1 $$
+and 
+$$ w \cdot x_i + b < 0 \; \text{if} \; y_i = -1.$$
+Put plainly, we may position $H$ such that one face points towards all the positive labels, and one corresponds to all the negative labels such that no labels are on the wrong side of the plane. Using the fact that $y_i \in \{-1, 1\} \: \forall i$, we may collapse the contraints to
+$$\left( w \cdot x_i + b \right)y_i > 0.$$
+
+Since $H$ will form the decision boundary, we  also hope to position it such that the perpendicular distance to all points is maximized. Yet if this is the case, we only need to consider two distances: the closest point to $H$ of either class. Then it must be that $H$ bisects the sum of these perpendicular distances. To see why, suppose that if we have exactly two points $x_1, x_2$ in $2D$ subject to these constraints. Orienting a line $h$ closer $x_1$ decreases its perpendicular distance to $h$, thereby increasing the maximum, minimum distance. Orienting the line closer to $x_2$ has the exact same effect. The best we can do is position $h$ exactly between $x_1$ and $x_2$. In general, these close points are called the support vectors. To find the perpendicular distance between a point a plane, we make use of yet another fact from linear algebra: The projection of vector $y$ onto vector $z$ may be found as:
+
+$$ \text{proj}_z (y) = \frac{z \cdot y}{||z||}\:y.$$
+Suppose that $x^+$ is that point of the positive class which is nearest to $H$. We are interested in the perpendicular distance from $x^+$ to $H$. This is given by the magnitude of the projection of $x_i$ onto the normal $w$ or
+$$ \frac{x_i \cdot w}{||w||}.$$
+The trick of $SVM$'s is to scale $w$ such that $x^+ \cdot w = 1$. We then hope to maximize the magnitude $\frac{1}{||w||}$. A symmetric argument can be applied to see that for the negative class, we hope to maximize the magnitude of $\frac{-1}{||w||}$. Since $H$ lies equidistant between the two classes, we hope to maximize
+
+$$\frac{1}{||w||} - \frac{-1}{||w||} = \frac{2}{||w||}.$$
+This is equivalent to the following optimization program:
+$$ \min{||w||} \; \text{subject to} \; \left( w \cdot x_i + b \right)y_i \ge 1.$$
+
+Notice, however, that we require a linear decision boundary to exist. To deal with non-linear data, we can perform coordinate transformations or the "kernel trick," which implicitly maps the data to a higher dimensional feature space where a linear decision boundary may exist. This can reduce bias while keeping variance low due to the maximal margin. The interested reader can find more [here](https://www.jeremykun.com/2017/06/05/formulating-the-support-vector-machine-optimization-problem/) and [here](https://course.ccs.neu.edu/cs5100f11/resources/jakkula.pdf). 
+
+For our purposes, we hope to find a kernel that transforms demographic and voting data in a way that we may separate it with a plane, thereby enabling us to classify rightward or leftward shifts in voting patterns. 
+
+# Data
+
+In this section, we provide an overview of the data, cleaning procedure, key features, transformation we performed, and construction of the target variable.
+
+## Overview
+
+The data was collected from the 5th of December to the 15th of December 2016 by Dalia Research and contains $n = 11,283$ observations. We omit the full cleaning process but make the following critical remarks: 
+
+1. We restrict analysis to France, Germany, Spain, Great Britain, Italy, and Poland given observations have complete voting data.
+2. We assign all parties a 1 - 10 score corresponding to political leaning relative to the entire European political landscape (1 = Extreme left. 10 = extreme right. 5 = did not vote). Hence $\texttt{party_vote_score}$ and $\texttt{future_party_vote_score}$ correspond to political leaning of the party voted for.
+3. $\texttt{party_ranking_score}$ corresponds to an exponential, weighted average of the party scores ordered by preference (higher values = right leaning. lower values = left leaning).
+
+The clean data on $n = 7148$ observations may be loaded as follows:
+
+```{r}
+P <- na.omit(read.csv("data/EU_political_data_clean.csv"))
+P$id <- NULL
+P$country_code <- ifelse(P$country_code != "FR", ifelse(P$country_code != "DE", ifelse(P$country_code != "ES", ifelse(P$country_code != "GB", ifelse(P$country_code != "IT", 5, 4), 3), 2), 1), 0)
+```
+
+For more information on data collection procedures and quality, the interested reader may visit [here](https://www.kaggle.com/datasets/daliaresearch/trump-effect). A full Codebook may be found in Appendix A. Cleaning functions may be found in Appendix B.
+
+## Feature Egineering
+
+Given the large carnality of the feature space $k = 57$ we engineer a political activity score and ideology score. The former encodes questions such as likelihood to demonstrate, frequency of voting, and how often an individual shares political views. The later encodes historic voting information, party ranking, and self-ascribed political ideology. We achieve these scores by examining the first principle component of a principle component analysis on the respective feature data frames:
+
+```{r}
+C <- P[, c("political_view", "party_ranking_score", "party_vote_score")]
+ideology_pca <- prcomp(scale(C)) # run pca
+P$ideology_score <- ideology_pca$x[, 1] # add pc1 back to P
+
+C <- P[, c("likelihood_to_demonstrate", "frequency_of_voting", "vote_next_national_election", "frequency_of_sharing_political_views")]
+C <- hot_encode(C, colnames(C))
+activity_pca <- prcomp(scale(C))
+P$political_activity <- activity_pca$x[, 1]
+```
+
+We may observe the quality of our new features by examining the relation to existing features:
+
+```{r p1, fig.cap = "Figure 1."}
+b1 <- boxplot(ideology_score ~ political_view, data = P, col = "magenta", main = "Ideology Score by Self-Ascribed Political View", xlab = "Political View (1 = extreme left. 6 = extreme right)", ylab = "Ideology Score")
+b2 <- boxplot(ideology_score ~ party_vote_score, data = P, col = "purple", main = "Ideology Score", xlab = "Party Vote Score (1 = extreme left. 0 = no vote. 10 = extreme right", ylab = "Ideology Score")
+```
+
+```{r p2, fig.cap = "Figure 2."}
+b3 <- boxplot(political_activity ~ vote_next_national_election, data = P, col = "magenta", main = "Political Activity Score\n by Propsensity to Vote in Next Election Cycle", xlab = "Propensity to Vote (1 = definitely vote. 5 = not elgiable to vote.", ylab = "Political Activity Score")
+b4 <- boxplot(political_activity ~ likelihood_to_demonstrate, data = P, col = "purple", main = "Political Activity Score\n by Likelihood to Attend A Political Demonstration", xlab = "Likelihood to Demonstrate (1 = very likey. 5 = very unlikely.)", ylab = "Political Acitivty Score")
+
+
+```
+
+We see that the new features capture the overall trends of the existing features.
+
+## Investigation
+
+We now construct the features of interested. $\texttt{vote_delta}$ records if an individual decided to change their vote to a more right or left leaning party with respect to their historic vote. $\texttt{direction}$ is an indicator corresponding to whether the shift was rightward $0$ or leftward $1$:
+
+```{r}
+P$vote_delta <- P$future_party_vote_score - P$party_vote_score
+P$direction <- ifelse(P$vote_delta < 0, 0, 1)
+```
+
+Since we are not interested in those individuals who did not change their voting stance, we drop them from the data frame:
+
+```{r}
+P <- P[P$vote_delta != 0, ]
+```
+
+```{r p3, fig.cap = "Figure 3."}
+par(mfrow = c(1, 2))  # 1 row, 2 columns
+hist(P$vote_delta, main = "Vote Change Magnitude", xlab = "Magnitude of Vote Change", col = "skyblue")
+hist(P$direction, main = "Diretion of Vote Shift", xlab = "Direction \n(0 = leftward. 1 = rightward.)", col = "blue")
+
+```
+
+$\texttt{vote_delta}$ follows a bimodal, normal distribution and $\texttt{direction}$ is a balanced. We may also view the distribution of these features by examining density plots and two-dimension density plots of historic and future votes. We do so for all observations in the data set, and those that switch from one party to another: 
+
+```{r p4, fig.cap = "Figure 4."}
+# Plot the density of party_vote_score
+plot(density(P$party_vote_score), 
+     main = "Density of Party Vote and Future Party Vote Scores\n(Complete Dataset)", 
+     xlab = "Vote Score", 
+     ylab = "Density", 
+     col = "blue", 
+     lwd = 2)  # Blue line for the first density
+
+# Add the density of future_party_vote_score to the same plot
+lines(density(P$future_party_vote_score), 
+      col = "red", 
+      lwd = 2)  # Red line for the second density
+
+# Add a legend to distinguish the lines
+legend("topright", 
+       legend = c("Party Vote Score", "Future Party Vote Score"), 
+       col = c("blue", "red"), 
+       lwd = 2)
+
+
+P|>
+  ggplot(aes(x=party_vote_score, y=future_party_vote_score)) +
+  geom_density_2d_filled() +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +  # Add y = x line
+  labs(title = "Current vs Future Vote Score\n(Complete Dataset)", x = "Party Vote Score", y = "Future Party Vote Score")
+```
+
+```{r p5, fig.cap = "Figure 5."}
+# Plot the density of party_vote_score
+plot(density(P[!(P$party_vote_score == 5 | P$future_party_vote_score == 5),]$party_vote_score), 
+     main = "Density of Party Vote and Future Party Vote Scores\n(Switch Votes)", 
+     xlab = "Vote Score", 
+     ylab = "Density", 
+     col = "blue", 
+     lwd = 2)  # Blue line for the first density
+
+# Add the density of future_party_vote_score to the same plot
+lines(density(P$future_party_vote_score), 
+      col = "red", 
+      lwd = 2)  # Red line for the second density
+
+# Add a legend to distinguish the lines
+legend("bottomright", 
+       legend = c("Party Vote Score", "Future Party Vote Score"), 
+       col = c("blue", "red"), 
+       lwd = 2)
+
+P[!(P$party_vote_score == 5 | P$future_party_vote_score == 5),] |>
+  ggplot(aes(x=party_vote_score, y=future_party_vote_score)) +
+  geom_density_2d_filled() +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +  # Add y = x line
+  labs(title = "Current vs Future Vote Score\n(Switch Votes)", x = "Party Vote Score", y = "Future Party Vote Score")
+```
+
+We observe that a large portion of non-voters plan to vote in the next election cycle. Interestingly, for those individuals who did/will vote in both elections, we the distribution becomes less extreme. Given the cardinality of the feature space, feature importance is most easily determined algorithmically:
+
+```{r, results = 'hide'}
+features <- c("direction", "party_vote_score", "ideology_score", "political_activity", "age", "political_view", "country_code", "income_net_monthly", "media_tv_hours", "settlment_size", "media_radio_hours") # NOTE this were determined after running the models, but are included here so things run faster.
+
+rf <- ranger(
+  formula = as.factor(direction) ~ .,        
+  data = P[,features],                    
+  importance = "impurity"
+)
+
+y <- as.factor(P$direction)
+X <- P[, features]
+X$direction <- NULL
+train_control <- trainControl(method = "cv", number = 5, summaryFunction = multiClassSummary)
+
+boost_tree <- train(
+  x = X, 
+  y = y,  
+  method = "xgbTree", 
+  trControl = train_control,
+  tuneLength = 3, 
+  metric = "Accuracy"
+)
+```
+
+```{r p6, fig.cap = "Figure 6."}
+feature_importance <- rf$variable.importance
+sorted_importance <- sort(feature_importance, decreasing = TRUE)[1:10]
+vals <- shap.values(xgb_model = boost_tree$finalModel, X_train = data.matrix(X))$mean_shap_score
+par(mfrow = c(1, 2))
+barchart(sorted_importance, xlab = "", main = "Random Forest Feature Importance to Vote Direction", col = "magenta")
+barchart(vals, main = "Boosted Tree SHAP Values by Feature", col = "purple", xlab = "Values")
+
+
+```
+
+In the subsequent section, we use these features to evaluate our models.
+
+# Models
+
+Our analysis of human behavior and high number of categorical features implicates a tree-based modeling approaching. Here, we choose a random forest. Support Vector Machine ($SVM$'s) also show strong performance on patter recognition and are effective in high dimesnional spaces. Given the noise inherent to sociological data, more complex algorithms run the risk of overfitting the data. Conversely, the bagged approach of the random forest and maximal margin of the $SVM$ algorithm reduce variance.
+
+## Tuning
+
+Here, we find the optimal set of hyperparamters for each model. Given that we hope to assess the strength of a relationship on a class-balanced outcome variable, we tune algorithm hyperparameters with respect to accuracy. We use $k$-fold validation since it efficiently ensures that all observations are both tuned and tested on. For each combination of hyperparamters, we take mean accuracy across $5$-folds. This is achieved via the following functions:
+
+```{r}
+tune_handler <- function(X, y, model, grid)
+{
+  full_grid <- expand.grid(grid)
+  alpha_opt <- (-1)
+  opt <- NULL
+  for (ii in 1:nrow(full_grid))
+  {
+    alpha <- k_fold_val(X, y, 5, model, full_grid[ii, ])
+    print(sprintf("[%d]: alpha = %.5f", ii, alpha))
+    if (alpha > alpha_opt)
+    {
+      alpha_opt <- alpha 
+      opt <- full_grid[ii, ]
+    }
+  }
+  return(data.frame(params = opt, alpha = c(alpha_opt)))
+}
+
+k_fold_val <- function(X, y, k, model, params)
+{
+  Z <- X[sample(1:nrow(X)), ] # randomly shuffle the dataframe
+  n <- nrow(Z)
+  f <- floor(n / k)
+  f_list <- list()
+  pivot <- 1
+  jj <- 1
+  rez <- rep(NA, k)
+  # generate folds
+  for (ii in 1:(n %% k ))
+  {
+    f_list[[jj]] <- pivot:(pivot + f)
+    pivot <- pivot + f + 1
+    jj <- jj + 1
+  }
+  for (ii in 1:(k - (n %% k)))
+  {
+    f_list[[jj]] <- pivot:(pivot + f - 1)
+    pivot <- pivot + f
+    jj <- jj + 1
+  }
+  # train and test
+  for (kk in 1:k)
+  {
+    test_indices <- f_list[[kk]] # grab validation fold
+    train_indices <- unlist(f_list[-kk]) # grab training folds
+    trained_model <- do.call(model, c(list(formula = as.formula(paste(y, "~.")), data = Z[train_indices, ]), params))
+    preds <- predict(trained_model, Z[test_indices, ])
+    rez[kk] <- mean(Z[test_indices, y] == preds)
+  }
+  return(mean(rez))
+}
+```
+
+We first use these functions to tune the Random Forest model:
+
+```{r, eval = FALSE}
+P <- P[, features]
+P$direction <- as.factor(P$direction)
+
+grid <- list(
+  ntree = c(125, 250, 500, 1000, 1500),  # Number of trees
+  mtry = c(2, 3, 5, 7, 9),      # Number of features to consider at each split
+  nodesize = c(5, 10, 20, 25),        # Minimum size of terminal nodes
+  maxnodes = c(20, 30, 50, 100)      # Max
+)
+rf_tune_opt <- tune_handler(P, "direction", randomForest, grid)
+```
+
+We tune the $SVM$ model in an identical fashion:
+```{r, eval = FALSE}
+
+svm_linear_grid <- list(
+  cost = seq(.05, 1, by = .05),
+  scale = TRUE,
+  kernel = "linear" 
+)
+
+svm_linear_tune_opt <- tune_handler(P, "direction", svm, svm_linear_grid)
+
+
+svm_rbf_grid <- list(
+  cost = seq(.05, 1, by = .05),
+  gamma = c(0.001, 0.01, 0.05, 0.1, 0.5, 1, 2),
+  scale = TRUE,
+  kernel = "radial"
+)
+
+svm_rbf_tune_opt <- tune_handler(P, "direction", svm, svm_rbf_grid)
+
+svm_poly_grid <- list(
+  cost = seq(.05, 1, by = .05),          # Cost parameter (C)
+  degree = c(2, 3, 4, 5),                          # Degree of the polynomial kernel
+  coef0 = c(0, 0.5, 1, 2, 5),
+  scale = TRUE,
+  kernel = "polynomial" # Coefficient controlling influence of higher terms
+)
+
+svm_poly_tune_opt <- tune_handler(P, "direction", svm, svm_poly_grid)
+
+svm_sigmoid_grid <- list(
+  cost = seq(.05, 1, by = .05),     # Cost parameter (C)
+  gamma = c(0.001, 0.01, 0.1, 0.5, 1, 2, 5),      # Gamma parameter (kernel-specific)
+  coef0 = c(0, 0.5, 1, 2, 5),
+  scale = TRUE,
+  kernel = "sigmoid"# Coefficient controlling higher-order terms
+)
+
+svm_sigmoid_tune_opt <-  tune_handler(P, "direction", svm, svm_sigmoid_grid)
+
+```
+
+Our best random forest ran on $1500$ trees, sample $7$ variables at each split, nodesize of 25 and maxnodes of 50 and accuracy of $.7485$. Our best $SVM$ ran on a radial kernel, with a cost parameter of $.4$ and gamma of $0.1$. It had an accuracy of $0.7411$. 
+
+Hence, the final models are as follows:
+
+```{r}
+P <- P[,features]
+P$direction <- as.factor(P$direction)
+rf <- randomForest(as.factor(direction) ~ ., data = P, ntree = 1500, mtry = 7, nodesize = 25, maxnodes = 50)
+m <- svm(as.factor(direction) ~ ., data = P, cost = 0.4, gamma = 0.1, scale = TRUE, kernel = "radial")
+
+```
+
+## Evaluation
+
+We evaluate the final models with respect to  using a $5$-fold validation. We may do so with a minor modification to the original $k$-fold procedure, which we omit.
+```{r, echo = FALSE}
+
+eval_metrics <- function(y, y_hat, c)
+{
+  a <- mean(y == y_hat)
+  TP <- sum((y == y_hat) & (y_hat == c))
+  FP <- sum((y != y_hat) & (y_hat == c))
+  FN <- sum((y != y_hat) & (y_hat == abs(c - 1)))
+  recall <- TP / (TP + FN)
+  precision <- TP / (TP + FP)
+  f1 <- 2 * (precision * recall) / (precision + recall)
+  return(c(a, recall, precision, f1))
+}
+
+k_fold_eval <- function(X, y, k, model, params, c)
+{
+  Z <- X[sample(1:nrow(X)), ] # randomly shuffle the dataframe
+  n <- nrow(Z)
+  f <- floor(n / k)
+  f_list <- list()
+  pivot <- 1
+  jj <- 1
+  rez <- matrix( ,nrow = k, ncol = 4)
+  # generate folds
+  for (ii in 1:(n %% k ))
+  {
+    f_list[[jj]] <- pivot:(pivot + f)
+    pivot <- pivot + f + 1
+    jj <- jj + 1
+  }
+  for (ii in 1:(k - (n %% k)))
+  {
+    f_list[[jj]] <- pivot:(pivot + f - 1)
+    pivot <- pivot + f
+    jj <- jj + 1
+  }
+  # train and test
+  for (kk in 1:k)
+  {
+    test_indices <- f_list[[kk]] # grab validation fold
+    train_indices <- unlist(f_list[-kk]) # grab training folds
+    trained_model <- do.call(model, c(list(formula = as.formula(paste(y, "~.")), data = Z[train_indices, ]), params))
+    preds <- predict(trained_model, Z[test_indices, ])
+    rez[kk,] <- eval_metrics(Z[test_indices, y] ,preds, c)
+  }
+  rez <- data.frame(rez)
+  return(colMeans(rez))
+}
+
+```
+
+
+```{r}
+R <- matrix(,nrow = 2, ncol = 5)
+R[1, ] <- c("Random Forest", k_fold_eval(P, "direction", 5, randomForest, list(ntree = 1500, mtry = 7, nodesize = 25, maxnodes = 50), 1)) 
+R[2, ] <- c("Support Vector Machine", k_fold_eval(P, "direction", 5, svm, list(cost = 0.4, gamma = 0.1, scale = TRUE, kernel = "radial"), 1))
+
+R <- data.frame(R)
+colnames(R) <- c("Model", "Accuracy", "Recall", "Precision", "F1")
+kable(R, caption = "Final Model Evaluations for Right Shifts")
+
+R <- matrix(,nrow = 2, ncol = 5)
+R[1, ] <- c("Random Forest", k_fold_eval(P, "direction", 5, randomForest, list(ntree = 1500, mtry = 7, nodesize = 25, maxnodes = 50), 0)) 
+R[2, ] <- c("Support Vector Machine", k_fold_eval(P, "direction", 5, svm, list(cost = 0.4, gamma = 0.1, scale = TRUE, kernel = "radial"), 0))
+
+R <- data.frame(R)
+colnames(R) <- c("Model", "Accuracy", "Recall", "Precision", "F1")
+kable(R, caption = "Final Model Evaluations for Left Shifts")
+
+```
+
+# Conclusion
+
+For individuals who planed to change their vote after the $2016$ election cycle, we attempt to classify the direction of said change. Our investigation revealed that a majority of individuals in this population did not vote in previous elections. For individuals who voted in both elections, the distribution of votes became more uniform across the ideological spectrum, with a slight bend towards far-right parties.
+
+Further, we found that features associated with ideology and political activity contributed most significantly to the classification task. Interestingly, demographic features ended being second most important as oppose to media consumption ones. This may indicate that material circumstance incite voting activity and change over media radicalization.
+
+The random forest model had a slightly higher accuracy and $F1$ score across both classes indicating better holistic performance. The optimal tuning parameters implicate a complex relationship in the data. Out of all $SVM$'s, the radial kernel performed best which suggests a non-linear relationship in the data. However, we note that all models were able to achieve north of $70\%$ accuracy, with minimal tuning. This analysis suggests that broader trends may be modeled rather simply, whereas a more complex approach is required to capture the misclassified observations. Future research would entail evaluating these models to different voter demographics and investigating the source of data set complexity.
+
+
+# Appendix
+
+## Appendix A: Data Codebook
+
+id - a unique identifier assigned to each observations.
+
+political_view - self-ascribed political ideology:
+
+1. Extreme Left
+2. Left
+3. Center left
+4. Center right
+5. Right
+6. Extreme right
+
+independence_or_respect - Which is more important for a child to have?
+
+1. Independence
+2. Respect for elders
+3. Don't have an opinion
+
+obedience_or_selfreliance - Which is more important for a child to have?
+
+1. Obedience
+2. Respect for Elders
+3. Don't have an opinion
+
+consideration_or_good_behavior - Which is more important for a child to have?
+
+1. Consideration for others
+2. Good behavior
+3. Don't have an opinion
+
+curiosity_or_good_manners - which is more important for a child to have?
+
+1. Consideration for others
+2. Good behavior
+3. Don't have an opinion
+
+worldview - Which of the following statements do you agree with the most?
+
+1. Our lives are threatened by terrorists, criminals, and immigrants and our priority should be to protect ourselves.
+
+2. It's a big, beautiful world, mostlfy full of good people, and we must find a way to embrace eac other and now allow ourselves to become isolated.
+
+party_ranking_score - exponential weighted average of ordered party rankings within a given country (1 = extreme left. 6 = extreme right).
+
+party_vote_score - political leaning of party voted for (1 = extreme left. 5 = no vote. 10 = extreme right).
+
+future_party_vote_score - political leaning of future party voted for (1 = extreme left. 5 = no vote. 10 = extreme right).
+
+ideology_score - composite metric calculated from $PCA$ on part_ranking_score, party_vote_score, and political_view.
+
+likelihood_to_demonstrate - How likely are you to join a protest or demonstration within the next 12 months?
+
+1. Very likely
+2. Fairly likely
+3. Not very likely
+4. Not at all likely
+5. Don't
+
+frequency_of_voting - How often have you voted in national elections / referendums?
+
+1. Always
+2. Most of the time 
+3. Sometimes
+4. Rarely
+5. Never
+6. I have never been elgiable to vote
+
+vote_next_national_election - Will you vote in the next national election?
+
+1. Yes, I will definitely vote
+2. Yes, I will probably vote
+3. No, I will probably not vote
+4. No, I will definitely not vote
+5. I'm not elgible to vote
+
+frequency_of_sharing_political_views - Do you agree or disagree: "My friends and family would describe me as someone who shares political views frequently":
+
+1. Strongly agree
+2. Somewhat agree
+3. Neither agree nor disagree
+4. Somewhat disagree
+5. Strongly disagree
+
+age - age.
+
+gender - Are you male or female?
+
+1. male
+2. female
+
+education_level - Which of the following best describes your formal education?
+
+1. I don't have a formal education
+2. I have some high school or secondary school education
+3. I completed high school or obtained an equivalent degree
+4. I have completed a university or equivlanet degree
+5. Other/I'd rather not answer the question.
+
+
+house_hold_size - "How many people are in the household where you currently live, including yourself?
+
+1. 1
+2. 2
+3. 3
+4. 4
+5. 5 or more
+
+
+settlement_size - Which best describes the place where you current live?
+
+1. Countryside
+2. Town with fewer than 1,000 people
+3. Town with 1,000 - 50,000 people
+4. City with 50,000 - 250,000 people
+5. City with 250,000 people - 1 million people
+6. City with 1 million - 5 million people
+7. City with 5 million - 10 million people
+8. City with more than 10 million people
+
+religion - What is your religion?
+
+1. Roman Catholic
+2. Orthodox Catholic
+3. Muslim
+4. Protestant
+5. Jewish
+6. Buddhist
+7. Other
+8. None / not religion
+
+is_lgbtq - Do you identify as lesbian, gay, bisexual, transgender, or queer?
+
+1. Yes
+2. No
+3. Prefer not to say
+
+income_net_monthly - What is your household's monthly income after taxes (adjusted for Pounds Sterling)?
+
+1. Under 200
+2. 200 - 400
+3. 400 - 800
+4. 800 - 1600
+5. 1600 - 2400
+6. 2400 - 3200
+7. 3200 - 4800
+8. 4800 - 6400
+9. 6400 - 8000
+10. 8000 - 9600
+11. 9600 - 12000
+12. > 12,000
+13. Prefer not to say
+
+
+country_code - E.U. country identifier
+
+ethnicity:
+
+1. White
+2. Hispanic or Latino
+3. Black or African America
+4. Middle Eastern or North African
+5. Native American or American Indian
+6. Asian / Pacific Islander
+7. Other
+
+media_tv_hours - On average, how much time do you spend watching TV / TV shows per day?
+
+1. 0
+2. 0 - .5 hours
+3. .5 - 1 hours
+4. 1 - 2 hours
+5. 2 - 3 hours
+6. 3 - 4 hours
+7. 4 - 5 hours
+8. > 5 hours 
+
+media_radio_hours - ON average how much time do you spend listening to the radio per day?
+
+1. 0 hours
+2. 0 - .5 hours
+3. .5 - 1 hours
+4. 1 - 2 hours
+5. 2 - 3 hours
+6. 3 - 4 hours
+7. 4 - 5 hours
+8 > 5 hours
+
+media_print_hours - On average how much time do you spend listening to the radio per day?
+
+1. 0 hours 
+2 0 - .5 hours
+3. .5 - 1 hours
+4. 1 - 2 hours
+5. 2 - 3 hours
+6. > 3 hours
+
+in_Y - where Y denotes a organization:
+
+0. I am not in Y.
+1. I participate in Y.
+
+use_Z - where Z denotes a social media platform:
+
+0. I don't use Z.
+1. I use Z.
+
+
+## Appendix B: Data Cleaning Functions
+
+Processing Ideology Data
+```{r, eval = FALSE}
+expo_score <- function(z, score)
+{
+  # takes z := 1xk integer vector 
+  # and rank := 1xk score vector
+  # and calculates the position
+  # weighted average score 
+  ovr <- NULL
+  n <- length(z)
+  alpha <- 2 / (n + 1)
+  for (i in 1:n)
+  {
+    ovr[z[i]] <- score[i] 
+  }
+  ovr <- rev(ovr)
+  ema <- ovr[1]
+  for (t in 2:n)
+  {
+    ema <- alpha * ovr[t] + (1 - alpha) * ema
+  }
+  return(ema)
+}
+
+extract_ranking <- function(z)
+{
+  # takes a preference string =
+  # and returns integer values
+  # in vector
+  delim <- '\\|'
+  return(as.integer(unlist(strsplit(z, delim))))
+}
+
+party_ranking_score <- function(r, score)
+{
+  return(expo_score(extract_ranking(r), score) )
+}
+
+party_score <- function(X)
+{
+  # collapse ranking and vote columns to single columns each
+  X$party_ranking <- mapply( 
+    function(code, de_r, es_r, fr_r, gb_r, it_r, pl_r)
+    {
+      switch(code,
+             "DE" = de_r,
+             "ES" = es_r,
+             "FR" = fr_r,
+             "GB" = gb_r,
+             "IT" = it_r,
+             "PL" = pl_r
+            )
+    }, X$X.dem..country_code, X$X.question..ranking_party_de, X$X.question..ranking_party_es,
+        X$X.question..ranking_party_fr, X$X.question..ranking_party_gb, X$X.question..ranking_party_it,
+        X$X.question..ranking_party_pl)
+  
+  X$party_vote <- mapply(
+    function(code, de_v, es_v, fr_v, gb_v, it_v, pl_v)
+    {
+     switch(code,
+             "DE" = de_v,
+             "ES" = es_v,
+             "FR" = fr_v,
+             "GB" = gb_v,
+             "IT" = it_v,
+             "PL" = pl_v
+            )
+    }, X$X.dem..country_code,X$X.question..voted_party_last_election_de,
+    X$X.question..voted_party_last_election_es, X$X.question..voted_party_last_election_fr,X$X.question..voted_party_last_election_gb,X$X.question..voted_party_last_election_it, X$X.question..voted_party_last_election_pl)
+  
+  X$future_party_vote <- mapply(
+    function(code, de_v, es_v, fr_v, gb_v, it_v, pl_v)
+    {
+     switch(code,
+             "DE" = de_v,
+             "ES" = es_v,
+             "FR" = fr_v,
+             "GB" = gb_v,
+             "IT" = it_v,
+             "PL" = pl_v
+            )
+    }, X$X.dem..country_code, X$X.question..vote_nextelection_de,  X$X.question..vote_nextelection_es, X$X.question..vote_nextelection_fr, X$X.question..vote_nextelection_gb, X$X.question..vote_nextelection_it, X$X.question..vote_nextelection_pl)
+  # clean-up
+  X$X.question..ranking_party_de <- NULL
+  X$X.question..ranking_party_es <- NULL
+  X$X.question..ranking_party_fr <- NULL
+  X$X.question..ranking_party_gb <- NULL
+  X$X.question..ranking_party_it <- NULL
+  X$X.question..ranking_party_pl <- NULL
+  X$X.question..voted_party_last_election_de <- NULL
+  X$X.question..voted_party_last_election_es <- NULL
+  X$X.question..voted_party_last_election_fr <- NULL
+  X$X.question..voted_party_last_election_gb <- NULL
+  X$X.question..voted_party_last_election_it <- NULL
+  X$X.question..voted_party_last_election_pl <- NULL
+  X$X.question..vote_nextelection_de <- NULL
+  X$X.question..vote_nextelection_fr <- NULL
+  X$X.question..vote_nextelection_es <- NULL
+  X$X.question..vote_nextelection_pl <- NULL
+  X$X.question..vote_nextelection_it <- NULL
+  X$X.question..vote_nextelection_gb <- NULL
+  
+  # average party ranking score
+  X$party_ranking_score <- mapply(
+  function(r, country)
+  {
+    score <- switch(country,
+                    "DE" = c(8, 3, 1, 2, 7, 10),
+                    "ES" = c(8, 3, 7, 1, 2, 6, 7),
+                    "FR" = c(3, 8, 1, 2, 10, 6, 1, 6),
+                    "GB" = c(8, 3, 3, 6, 2, 10),
+                    "IT" = c(3, 8, 6, 6, 8, 2, 7, 10, 8, 9),
+                    "PL" = c(10, 7, 7, 9, 4, 10, 9)
+                    )
+    return(party_ranking_score(r, score))
+  },X$party_ranking ,X$X.dem..country_code)
+  # historic party vote score
+  X$party_vote_score <- mapply(
+    function(v, country)
+    {
+     score <- switch(country,
+                    "DE" = c(8, 3, 1, 2, 7, 10),
+                    "ES" = c(8, 3, 7, 1, 2, 6, 7),
+                    "FR" = c(3, 8, 1, 2, 10, 6, 1, 6),
+                    "GB" = c(8, 3, 3, 6, 2, 10),
+                    "IT" = c(3, 8, 6, 6, 8, 2, 7, 10, 8, 9),
+                    "PL" = c(10, 7, 7, 9, 4, 10, 9)
+                    )
+      return(score[v])
+    }, X$party_vote, X$X.dem..country_code)
+  # future party voting score
+  X$future_party_vote_score <- mapply(
+    function(v, country)
+    {
+      score <- switch(country,
+                    "DE" = c(8, 3, 1, 2, 7, 10),
+                    "ES" = c(8, 3, 7, 1, 2, 6, 7),
+                    "FR" = c(3, 8, 1, 2, 10, 6, 1, 6),
+                    "GB" = c(8, 3, 3, 6, 2, 10),
+                    "IT" = c(3, 8, 6, 6, 8, 2, 7, 10, 8, 9),
+                    "PL" = c(10, 7, 7, 9, 4, 10, 9)
+                    )
+      return(score[v])
+    }, X$future_party_vote, X$X.dem..country_code)
+  # clean up again
+  X[is.na(X$party_vote_score), ]$party_vote_score <- 5 # set those who didn't vote to 5
+  X[is.na(X$future_party_vote_score), ]$future_party_vote_score <- 5 # set those who didn't vote to 5
+  X$party_ranking <- NULL
+  X$party_vote <- NULL
+  X$future_party_vote <- NULL
+  return(X)
+}
+
+hot_encode <- function(X, categories)
+{ # add hot encoded columns
+  for (c in categories)
+  {
+    vals <- unique(X[,c])
+    if (length(vals) > 2)
+    {
+       X[,c] <- as.factor(X[,c])
+       X <- cbind(X, model.matrix(as.formula(paste("~", c, "- 1")), data = X))
+    }
+    else
+    {
+      X[,paste0(c, "_bool")] <- ifelse(X[, c] == vals[1], 1, 0)
+    }
+   
+  }
+  # clean up
+  for (c in categories)
+  {
+    X[,c] <- NULL
+  }
+  return(X)
+}
+
+get_pc1 <- function(X)
+{ # runs pca and gets the first principle component
+  return(-1)
+}
+
+```
+
+Processing Activism Data
+
+```{r, eval = FALSE}
+# parsing voting history
+voting_information <- function(X)
+{
+  X$party_vote <- mapply(
+    function(code, de_v, es_v, fr_v, gb_v, it_v, pl_v)
+    {
+     switch(code,
+             "DE" = de_v,
+             "ES" = es_v,
+             "FR" = fr_v,
+             "GB" = gb_v,
+             "IT" = it_v,
+             "PL" = pl_v
+            )
+    }, X$X.dem..country_code,X$X.question..voted_party_last_election_de,
+    X$X.question..voted_party_last_election_es, X$X.question..voted_party_last_election_fr,X$X.question..voted_party_last_election_gb,X$X.question..voted_party_last_election_it, X$X.question..voted_party_last_election_pl)
+  
+  X$future_party_vote <- mapply(
+    function(code, de_v, es_v, fr_v, gb_v, it_v, pl_v)
+    {
+     switch(code,
+             "DE" = de_v,
+             "ES" = es_v,
+             "FR" = fr_v,
+             "GB" = gb_v,
+             "IT" = it_v,
+             "PL" = pl_v
+            )
+    }, X$X.dem..country_code, X$X.question..vote_nextelection_de,  X$X.question..vote_nextelection_es, X$X.question..vote_nextelection_fr, X$X.question..vote_nextelection_gb, X$X.question..vote_nextelection_it, X$X.question..vote_nextelection_pl)
+  # clean-up
+  X$X.question..voted_party_last_election_de <- NULL
+  X$X.question..voted_party_last_election_es <- NULL
+  X$X.question..voted_party_last_election_fr <- NULL
+  X$X.question..voted_party_last_election_gb <- NULL
+  X$X.question..voted_party_last_election_it <- NULL
+  X$X.question..voted_party_last_election_pl <- NULL
+  X$X.question..vote_nextelection_de <- NULL
+  X$X.question..vote_nextelection_fr <- NULL
+  X$X.question..vote_nextelection_es <- NULL
+  X$X.question..vote_nextelection_pl <- NULL
+  X$X.question..vote_nextelection_it <- NULL
+  X$X.question..vote_nextelection_gb <- NULL
+  # historic and future plans to vote
+  X$did_vote <- mapply(
+    function(vote, country)
+    {
+      treshold <- switch(country,
+                    "DE" = 8,
+                    "ES" = 9,
+                    "FR" = 10,
+                    "GB" = 8,
+                    "IT" = 12,
+                    "PL" = 9
+                    )
+      if (vote == treshold)
+      {
+        return(0)
+      }
+      else
+      {
+        return(1)
+      }
+    }, X$party_vote, X$X.dem..country_code)
+  
+  X$will_vote <- mapply(
+    function(vote, country)
+    {
+      treshold <- switch(country,
+                    "DE" = 8,
+                    "ES" = 9,
+                    "FR" = 10,
+                    "GB" = 8,
+                    "IT" = 12,
+                    "PL" = 9
+                    )
+      if (vote == treshold)
+      {
+        return(0)
+      }
+      else
+      {
+        return(1)
+      }
+    }, X$future_party_vote, X$X.dem..country_code)
+  #clean up again 
+  X$party_vote <- NULL
+  X$future_party_vote <- NULL
+  return(X)
+}
+
+# what if the thing we are predicting is multi dimesnional
+# build 5 seperate models
+# learn technique for multi-dimensional
+
+```
+
+Processing Social Media Data:
+
+```{r, eval = FALSE}
+
+social_media_network_use <- function(X)
+{
+  n <- nrow(X)
+  m <- 16
+  B <- data.frame(matrix(0, nrow = n, ncol = m))
+  colnames(B) <- c("use_facebook", "use_twitter", "use_instagram", "use_snap", "use_pinterest", "use_google+", "use_linkedin", "use_reddit", "use_whatsapp", "use_wechat", "use_viber", "use_line", "use_youtube", "use_blog", "use_other_network", "no_social_media")
+  network_use <- X$X.aud..social_networks_regularly_used
+  for (ii in 1:n)
+  {
+    network_codes <- extract_ranking(network_use[ii])
+    for (network in network_codes)
+    {
+      B[ii, network] <- 1
+    }
+  }
+  return(B)
+}
+
+social_media_use <- function(X)
+{
+  n <- nrow(X)
+  m <- 5
+  R <- data.frame(matrix(NA, nrow = n, ncol = m))
+  colnames(R) <- c("commenting", "sharing", "express_opinion", "reading", "connecting")
+  rankings <- X$X.aud..social_media_activity_rank
+  for (ii in 1:n)
+  {
+    rankings_numeric <- extract_ranking(rankings[ii])
+    for (jj in 1:m)
+    { # may be a more effecient way by setting the vectors as the rows in the dataframe operator
+      R[ii, jj] = rankings_numeric[jj]
+    }
+  }
+  return(R)
+}
+
+organization_membership <- function(X)
+{
+  n <- nrow(X)
+  m <- 5
+  O <- data.frame(matrix(0, nrow = n, ncol = m))
+  colnames(O) <- c("in_sports", "in_political_party", "in_religious_org", "in_other", "in_none")
+  organizations <- X$X.aud..member_organization
+  for (ii in 1:n)
+  {
+    organization_codes <- extract_ranking(organizations[ii])
+    for (code in organization_codes)
+    {
+      O[ii, code] <- 1
+    }
+  }
+  return(O)
+}
+
+media_information <- function(X)
+{
+  X <- cbind(X, social_media_network_use(X))
+  X <- cbind(X, social_media_use(X))
+  X <- cbind(X, organization_membership((X)))
+  X$X.aud..social_networks_regularly_used <- NULL
+  X$X.aud..social_media_activity_rank <- NULL
+  X$X.aud..member_organization <- NULL
+  return(X)
+}
+```
+
+Processing: Demographic Information
+
+```{r, eval = FALSE}
+demographic_information <- function(X)
+{
+  X$ethnicity <- mapply(
+    function(d)
+    {
+      return(extract_ranking(d)[1])
+    }, X$X.dem..ethnic_background)
+  
+  X$X.dem..ethnic_background <- NULL
+  return(X)
+}
+```
+

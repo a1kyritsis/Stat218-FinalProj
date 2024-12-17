@@ -1,0 +1,484 @@
+
+```{r}
+# Libraries
+library(tidyr)
+library(TTR)
+
+```
+
+```{r}
+## Helper functions
+show_colnames <- function(X)
+{# prints out column names of data frame X in a table
+  print(data.frame(Index = seq_along(names(X)), Column_Names = names(X)), row.names = FALSE)
+}
+
+```
+
+```{r}
+## useful constants and lists
+country_codes <- c("DE", "ES", "FR", "GB", "IT", "PL")
+ideology_features <- c("X.meta..uuid", "X.question..political_view", "X.question..ranking_party_de", "X.question..voted_party_last_election_de", "X.question..ranking_party_fr", "X.question..voted_party_last_election_fr", "X.question..ranking_party_es", "X.question..voted_party_last_election_es", "X.question..ranking_party_pl",
+"X.question..voted_party_last_election_pl", "X.question..ranking_party_it", "X.question..voted_party_last_election_it", "X.question..ranking_party_gb", "X.question..voted_party_last_election_gb", "X.question..independence_or_respect", "X.question..obedience_or_selfreliance", "X.question..consideration_or_good_behaviour", "X.question..curiosity_or_good_manners", "X.question..worldview", "X.dem..country_code", "X.question..vote_nextelection_de","X.question..vote_nextelection_fr", "X.question..vote_nextelection_es", "X.question..vote_nextelection_pl", "X.question..vote_nextelection_it", "X.question..vote_nextelection_gb")
+political_activity_features <- c("X.meta..uuid", "X.dem..country_code", "X.question..likelihood_to_demonstrate", "X.question..frequency_of_voting", "X.question..vote_next_national_election", "X.question..frequent_sharing_of_politicalviews", "X.question..voted_party_last_election_de", "X.question..voted_party_last_election_fr", "X.question..voted_party_last_election_es", "X.question..voted_party_last_election_pl", "X.question..voted_party_last_election_it", "X.question..voted_party_last_election_gb", "X.question..vote_nextelection_de","X.question..vote_nextelection_fr", "X.question..vote_nextelection_es", "X.question..vote_nextelection_pl", "X.question..vote_nextelection_it", "X.question..vote_nextelection_gb")
+media_engagement_features <- c("X.meta..uuid", "X.aud..social_networks_regularly_used", "X.aud..social_media_activity_rank", "X.aud..online_sharing_frequency", "X.aud..sharing_network_size", "X.aud..member_organization", "X.aud..media_tv_hours", "X.aud..media_radio_hours", "X.aud..media_print_hours")
+demographic_information_features <- c("X.meta..uuid", "X.dem..age", "X.dem..gender", "X.dem..education_level", "X.dem..household_size", "X.dem..settlement_size", "X.dem..ethnic_background", "X.dem..religion", "X.dem..lgbtq", "X.dem..income_net_monthly", "X.dem..country_code")
+```
+
+# Constructing Ideologies
+
+Processing Ideology Data
+```{r}
+expo_score <- function(z, score)
+{
+  # takes z := 1xk integer vector 
+  # and rank := 1xk score vector
+  # and calculates the position
+  # weighted average score 
+  ovr <- NULL
+  n <- length(z)
+  alpha <- 2 / (n + 1)
+  for (i in 1:n)
+  {
+    ovr[z[i]] <- score[i] 
+  }
+  ovr <- rev(ovr)
+  ema <- ovr[1]
+  for (t in 2:n)
+  {
+    ema <- alpha * ovr[t] + (1 - alpha) * ema
+  }
+  return(ema)
+}
+
+extract_ranking <- function(z)
+{
+  # takes a preference string =
+  # and returns integer values
+  # in vector
+  delim <- '\\|'
+  return(as.integer(unlist(strsplit(z, delim))))
+}
+
+party_ranking_score <- function(r, score)
+{
+  return(expo_score(extract_ranking(r), score) )
+}
+
+party_score <- function(X)
+{
+  # collapse ranking and vote columns to single columns each
+  X$party_ranking <- mapply( 
+    function(code, de_r, es_r, fr_r, gb_r, it_r, pl_r)
+    {
+      switch(code,
+             "DE" = de_r,
+             "ES" = es_r,
+             "FR" = fr_r,
+             "GB" = gb_r,
+             "IT" = it_r,
+             "PL" = pl_r
+            )
+    }, X$X.dem..country_code, X$X.question..ranking_party_de, X$X.question..ranking_party_es,
+        X$X.question..ranking_party_fr, X$X.question..ranking_party_gb, X$X.question..ranking_party_it,
+        X$X.question..ranking_party_pl)
+  
+  X$party_vote <- mapply(
+    function(code, de_v, es_v, fr_v, gb_v, it_v, pl_v)
+    {
+     switch(code,
+             "DE" = de_v,
+             "ES" = es_v,
+             "FR" = fr_v,
+             "GB" = gb_v,
+             "IT" = it_v,
+             "PL" = pl_v
+            )
+    }, X$X.dem..country_code,X$X.question..voted_party_last_election_de,
+    X$X.question..voted_party_last_election_es, X$X.question..voted_party_last_election_fr,X$X.question..voted_party_last_election_gb,X$X.question..voted_party_last_election_it, X$X.question..voted_party_last_election_pl)
+  
+  X$future_party_vote <- mapply(
+    function(code, de_v, es_v, fr_v, gb_v, it_v, pl_v)
+    {
+     switch(code,
+             "DE" = de_v,
+             "ES" = es_v,
+             "FR" = fr_v,
+             "GB" = gb_v,
+             "IT" = it_v,
+             "PL" = pl_v
+            )
+    }, X$X.dem..country_code, X$X.question..vote_nextelection_de,  X$X.question..vote_nextelection_es, X$X.question..vote_nextelection_fr, X$X.question..vote_nextelection_gb, X$X.question..vote_nextelection_it, X$X.question..vote_nextelection_pl)
+  # clean-up
+  X$X.question..ranking_party_de <- NULL
+  X$X.question..ranking_party_es <- NULL
+  X$X.question..ranking_party_fr <- NULL
+  X$X.question..ranking_party_gb <- NULL
+  X$X.question..ranking_party_it <- NULL
+  X$X.question..ranking_party_pl <- NULL
+  X$X.question..voted_party_last_election_de <- NULL
+  X$X.question..voted_party_last_election_es <- NULL
+  X$X.question..voted_party_last_election_fr <- NULL
+  X$X.question..voted_party_last_election_gb <- NULL
+  X$X.question..voted_party_last_election_it <- NULL
+  X$X.question..voted_party_last_election_pl <- NULL
+  X$X.question..vote_nextelection_de <- NULL
+  X$X.question..vote_nextelection_fr <- NULL
+  X$X.question..vote_nextelection_es <- NULL
+  X$X.question..vote_nextelection_pl <- NULL
+  X$X.question..vote_nextelection_it <- NULL
+  X$X.question..vote_nextelection_gb <- NULL
+  
+  # average party ranking score
+  X$party_ranking_score <- mapply(
+  function(r, country)
+  {
+    score <- switch(country,
+                    "DE" = c(8, 3, 1, 2, 7, 10),
+                    "ES" = c(8, 3, 7, 1, 2, 6, 7),
+                    "FR" = c(3, 8, 1, 2, 10, 6, 1, 6),
+                    "GB" = c(8, 3, 3, 6, 2, 10),
+                    "IT" = c(3, 8, 6, 6, 8, 2, 7, 10, 8, 9),
+                    "PL" = c(10, 7, 7, 9, 4, 10, 9)
+                    )
+    return(party_ranking_score(r, score))
+  },X$party_ranking ,X$X.dem..country_code)
+  # historic party vote score
+  X$party_vote_score <- mapply(
+    function(v, country)
+    {
+     score <- switch(country,
+                    "DE" = c(8, 3, 1, 2, 7, 10),
+                    "ES" = c(8, 3, 7, 1, 2, 6, 7),
+                    "FR" = c(3, 8, 1, 2, 10, 6, 1, 6),
+                    "GB" = c(8, 3, 3, 6, 2, 10),
+                    "IT" = c(3, 8, 6, 6, 8, 2, 7, 10, 8, 9),
+                    "PL" = c(10, 7, 7, 9, 4, 10, 9)
+                    )
+      return(score[v])
+    }, X$party_vote, X$X.dem..country_code)
+  # future party voting score
+  X$future_party_vote_score <- mapply(
+    function(v, country)
+    {
+      score <- switch(country,
+                    "DE" = c(8, 3, 1, 2, 7, 10),
+                    "ES" = c(8, 3, 7, 1, 2, 6, 7),
+                    "FR" = c(3, 8, 1, 2, 10, 6, 1, 6),
+                    "GB" = c(8, 3, 3, 6, 2, 10),
+                    "IT" = c(3, 8, 6, 6, 8, 2, 7, 10, 8, 9),
+                    "PL" = c(10, 7, 7, 9, 4, 10, 9)
+                    )
+      return(score[v])
+    }, X$future_party_vote, X$X.dem..country_code)
+  # clean up again
+  X[is.na(X$party_vote_score), ]$party_vote_score <- 5 # set those who didn't vote to 5
+  X[is.na(X$future_party_vote_score), ]$future_party_vote_score <- 5 # set those who didn't vote to 5
+  X$party_ranking <- NULL
+  X$party_vote <- NULL
+  X$future_party_vote <- NULL
+  return(X)
+}
+
+hot_encode <- function(X, categories)
+{ # add hot encoded columns
+  for (c in categories)
+  {
+    vals <- unique(X[,c])
+    if (length(vals) > 2)
+    {
+       X[,c] <- as.factor(X[,c])
+       X <- cbind(X, model.matrix(as.formula(paste("~", c, "- 1")), data = X))
+    }
+    else
+    {
+      X[,paste0(c, "_bool")] <- ifelse(X[, c] == vals[1], 1, 0)
+    }
+   
+  }
+  # clean up
+  for (c in categories)
+  {
+    X[,c] <- NULL
+  }
+  return(X)
+}
+
+get_pc1 <- function(X)
+{ # runs pca and gets the first principle component
+  return(-1)
+}
+
+```
+
+# Processing Activism Data
+
+```{r}
+# parsing voting history
+voting_information <- function(X)
+{
+  X$party_vote <- mapply(
+    function(code, de_v, es_v, fr_v, gb_v, it_v, pl_v)
+    {
+     switch(code,
+             "DE" = de_v,
+             "ES" = es_v,
+             "FR" = fr_v,
+             "GB" = gb_v,
+             "IT" = it_v,
+             "PL" = pl_v
+            )
+    }, X$X.dem..country_code,X$X.question..voted_party_last_election_de,
+    X$X.question..voted_party_last_election_es, X$X.question..voted_party_last_election_fr,X$X.question..voted_party_last_election_gb,X$X.question..voted_party_last_election_it, X$X.question..voted_party_last_election_pl)
+  
+  X$future_party_vote <- mapply(
+    function(code, de_v, es_v, fr_v, gb_v, it_v, pl_v)
+    {
+     switch(code,
+             "DE" = de_v,
+             "ES" = es_v,
+             "FR" = fr_v,
+             "GB" = gb_v,
+             "IT" = it_v,
+             "PL" = pl_v
+            )
+    }, X$X.dem..country_code, X$X.question..vote_nextelection_de,  X$X.question..vote_nextelection_es, X$X.question..vote_nextelection_fr, X$X.question..vote_nextelection_gb, X$X.question..vote_nextelection_it, X$X.question..vote_nextelection_pl)
+  # clean-up
+  X$X.question..voted_party_last_election_de <- NULL
+  X$X.question..voted_party_last_election_es <- NULL
+  X$X.question..voted_party_last_election_fr <- NULL
+  X$X.question..voted_party_last_election_gb <- NULL
+  X$X.question..voted_party_last_election_it <- NULL
+  X$X.question..voted_party_last_election_pl <- NULL
+  X$X.question..vote_nextelection_de <- NULL
+  X$X.question..vote_nextelection_fr <- NULL
+  X$X.question..vote_nextelection_es <- NULL
+  X$X.question..vote_nextelection_pl <- NULL
+  X$X.question..vote_nextelection_it <- NULL
+  X$X.question..vote_nextelection_gb <- NULL
+  # historic and future plans to vote
+  X$did_vote <- mapply(
+    function(vote, country)
+    {
+      treshold <- switch(country,
+                    "DE" = 8,
+                    "ES" = 9,
+                    "FR" = 10,
+                    "GB" = 8,
+                    "IT" = 12,
+                    "PL" = 9
+                    )
+      if (vote == treshold)
+      {
+        return(0)
+      }
+      else
+      {
+        return(1)
+      }
+    }, X$party_vote, X$X.dem..country_code)
+  
+  X$will_vote <- mapply(
+    function(vote, country)
+    {
+      treshold <- switch(country,
+                    "DE" = 8,
+                    "ES" = 9,
+                    "FR" = 10,
+                    "GB" = 8,
+                    "IT" = 12,
+                    "PL" = 9
+                    )
+      if (vote == treshold)
+      {
+        return(0)
+      }
+      else
+      {
+        return(1)
+      }
+    }, X$future_party_vote, X$X.dem..country_code)
+  #clean up again 
+  X$party_vote <- NULL
+  X$future_party_vote <- NULL
+  return(X)
+}
+
+# what if the thing we are predicting is multi dimesnional
+# build 5 seperate models
+# learn technique for multi-dimensional
+
+```
+
+Processing Social Media Data
+
+```{r}
+
+social_media_network_use <- function(X)
+{
+  n <- nrow(X)
+  m <- 16
+  B <- data.frame(matrix(0, nrow = n, ncol = m))
+  colnames(B) <- c("use_facebook", "use_twitter", "use_instagram", "use_snap", "use_pinterest", "use_google+", "use_linkedin", "use_reddit", "use_whatsapp", "use_wechat", "use_viber", "use_line", "use_youtube", "use_blog", "use_other_network", "no_social_media")
+  network_use <- X$X.aud..social_networks_regularly_used
+  for (ii in 1:n)
+  {
+    network_codes <- extract_ranking(network_use[ii])
+    for (network in network_codes)
+    {
+      B[ii, network] <- 1
+    }
+  }
+  return(B)
+}
+
+social_media_use <- function(X)
+{
+  n <- nrow(X)
+  m <- 5
+  R <- data.frame(matrix(NA, nrow = n, ncol = m))
+  colnames(R) <- c("commenting", "sharing", "express_opinion", "reading", "connecting")
+  rankings <- X$X.aud..social_media_activity_rank
+  for (ii in 1:n)
+  {
+    rankings_numeric <- extract_ranking(rankings[ii])
+    for (jj in 1:m)
+    { # may be a more effecient way by setting the vectors as the rows in the dataframe operator
+      R[ii, jj] = rankings_numeric[jj]
+    }
+  }
+  return(R)
+}
+
+organization_membership <- function(X)
+{
+  n <- nrow(X)
+  m <- 5
+  O <- data.frame(matrix(0, nrow = n, ncol = m))
+  colnames(O) <- c("in_sports", "in_political_party", "in_religious_org", "in_other", "in_none")
+  organizations <- X$X.aud..member_organization
+  for (ii in 1:n)
+  {
+    organization_codes <- extract_ranking(organizations[ii])
+    for (code in organization_codes)
+    {
+      O[ii, code] <- 1
+    }
+  }
+  return(O)
+}
+
+media_information <- function(X)
+{
+  X <- cbind(X, social_media_network_use(X))
+  X <- cbind(X, social_media_use(X))
+  X <- cbind(X, organization_membership((X)))
+  X$X.aud..social_networks_regularly_used <- NULL
+  X$X.aud..social_media_activity_rank <- NULL
+  X$X.aud..member_organization <- NULL
+  return(X)
+}
+```
+
+Demographic Information
+
+```{r}
+demographic_information <- function(X)
+{
+  X$ethnicity <- mapply(
+    function(d)
+    {
+      return(extract_ranking(d)[1])
+    }, X$X.dem..ethnic_background)
+  
+  X$X.dem..ethnic_background <- NULL
+  return(X)
+}
+```
+
+
+# General Data Work 
+
+```{r}
+PATH <- "data/"
+f <- "EU_politics_data.csv.csv"
+P_origin <- read.csv(paste0(PATH, f))
+
+```
+
+```{r}
+# ideology matrix
+P <- P_origin[P_origin$X.dem..country_code == "DE" | P_origin$X.dem..country_code == "ES" | P_origin$X.dem..country_code == "FR" | P_origin$X.dem..country_code == "GB" | P_origin$X.dem..country_code == "IT" | P_origin$X.dem..country_code == "PL", ideology_features]
+# political activity matrix
+A <- P_origin[P_origin$X.dem..country_code == "DE" | P_origin$X.dem..country_code == "ES" | P_origin$X.dem..country_code == "FR" | P_origin$X.dem..country_code == "GB" | P_origin$X.dem..country_code == "IT" | P_origin$X.dem..country_code == "PL", political_activity_features]
+# media use matrix
+M <- P_origin[P_origin$X.dem..country_code == "DE" | P_origin$X.dem..country_code == "ES" | P_origin$X.dem..country_code == "FR" | P_origin$X.dem..country_code == "GB" | P_origin$X.dem..country_code == "IT" | P_origin$X.dem..country_code == "PL", media_engagement_features]
+# demographic matrix
+D <- P_origin[P_origin$X.dem..country_code == "DE" | P_origin$X.dem..country_code == "ES" | P_origin$X.dem..country_code == "FR" | P_origin$X.dem..country_code == "GB" | P_origin$X.dem..country_code == "IT" | P_origin$X.dem..country_code == "PL", demographic_information_features]
+
+```
+
+Ideological Evaluation (THIS WORKS BEST)
+
+```{r}
+#ideology_categoricals <- c("X.question..independence_or_respect", "X.question..independence_or_respect", "X.question..obedience_or_selfreliance", "X.question..consideration_or_good_behaviour", "X.question..curiosity_or_good_manners", "X.question..worldview") # assign categorical features for processing
+P <- party_score(P) # clean data
+
+#P_encode <- hot_encode(P, ideology_categoricals) # hot encode for PCA
+#P_encode$X.dem..country_code <- NULL # drop country code
+#P_encode$X.meta..uuid <- NULL # and id
+P_encode <- P[, c("X.question..political_view", "party_ranking_score", "party_vote_score", "future_party_vote_score")]
+ideology_pca <- prcomp(scale(P_encode)) # run pca
+P$ideology_score <- ideology_pca$x[, 1] # add pc1 back to P
+P$X.dem..country_code <- NULL
+#P <- P[order(P$ideology_score), ]
+
+boxplot(ideology_score ~ as.factor(X.question..worldview), data = P, main = "Ideology Score by Political View", xlab = "Political View (0 = extreme left. 6 = extreme right", ylab = "PCA", col = "red")
+
+
+```
+
+
+Political activity evaluation
+
+```{r}
+political_activity_categoricals <- c("X.question..likelihood_to_demonstrate", "X.question..frequency_of_voting", "X.question..vote_next_national_election", "X.question..frequent_sharing_of_politicalviews")
+A <- voting_information(A)
+A_encode <- hot_encode(A, political_activity_categoricals)
+A_encode$X.dem..country_code <- NULL
+A_encode$X.meta..uuid <- NULL
+activity_pca <- prcomp(scale(A_encode))
+A$political_activity <- activity_pca$x[, 1]
+A$X.dem..country_code <- NULL
+#A <- A[, c("X.meta..uuid", "political_activity")]
+#A <- A[order(A$political_activity), ]
+```
+
+```{r}
+sort(activity_pca$rotation[,1])
+boxplot(A$political_activity ~ A$X.question..likelihood_to_demonstrate)
+boxplot(A$political_activity~ A$X.question..frequency_of_voting)
+boxplot(A$political_activity ~ A$X.question..vote_next_national_election)
+```
+
+
+Media Use and Demographic Info Features
+```{r}
+M <- media_information(M)
+D <- demographic_information(D)
+```
+
+Creating Final Data Frame
+
+```{r}
+final_colnames <- c("id", "political_view", "independence_or_respect", "obedience_or_selfreliance", "consideration_or_good_behavior", "curiosity_or_good_manners", "worldview", "party_ranking_score", "party_vote_score", "future_party_vote_score", "ideology_score", "likelihood_to_demonstrate", "frequency_of_voting", "vote_next_national_election", "frequency_of_sharing_political_views", "did_vote", "will_vote", "political_activity", "online_sharing_frequency", "sharing_network_size", "media_tv_hours", "media_radio_hours", "media_print_hours", "use_facebook", "use_twitter", "use_instagram", "use_snap", "use_pinterest", "use_google+", "use_linkdin", "use_reddit", "use_whatsapp", "use_wechat", "use_viber", "use_line", "use_youtube", "use_blog", "use_other_network", "no_social_media", "commenting_rank", "sharing_rank", "express_opinion_rank", "reading_rank", "connecting_rank", "in_sports", "in_political_party", "in_religious_org", "in_other", "in_none", "age", "gender", "education_level", "household_size", "settlment_size", "religion", "is_lgbtq", "income_net_monthly", "country_code", "ethnicity")
+datz <- list(P, A, M, D)
+final <- Reduce(function(x, y) merge(x, y, by = "X.meta..uuid", all = TRUE), datz)
+colnames(final) <- final_colnames
+final <- final[order(final$ideology_score), ]
+write.csv(final, "data/EU_political_data_clean.csv", row.names = FALSE)
+
+```
+
+
+

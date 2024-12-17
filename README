@@ -1,0 +1,5 @@
+FinalAnalysis.html contains the final report.
+FinalAnalysis.Rmd contains the .Rmd file used to generate.
+data_processing.Rmd contains code to process the data into the clean .csv file.
+delta_vote_analysis.Rmd contains analysis to determine our target features.
+data is a folder that contains all other data.

@@ -1,0 +1,229 @@
+---
+title: "Final Project"
+output: html_document
+date: "2024-10-11"
+---
+
+# The Trump Effect Statistical Analysis
+
+```{r, echo=FALSE, message=FALSE}
+library(ggplot2)
+library(tidyverse)
+library(caret)
+library(randomForest)
+```
+
+
+### Data Set Introduction
+
+We will use using a dataset from Kaggle from researcher Niklas Anzinger at Dalia Research, a market research firm. The data includes political and demographic variables from voters in Europe before and after Trump's election in 2016, we hope to see if we can find some trends or relationships between changes in voting patterns and individual voter information. We will only stratch the surface of this data set and future work could potentially glean much more interesting information.
+
+Let's look at individual votes before and action Trump's election in 2016. We have two variables we can look at, party vote score and future party vote score. Party vote score and future party vote score is a number 1 to 9 based on how right or left the party in the individual voted or plans to vote for in the next election for is. A value of zero means they did not vote or do not plan to vote. I will re-code these values for future analysis, did not vote will be coded as NA and I will shift the vote scores over 5 so that left parties are negative and right are positive.
+
+```{r,echo=FALSE}
+data <- na.omit(read.csv("data/EU_political_data_clean.csv"))
+
+## Copy data_s to shift vote scores
+data_s = data 
+data_s$party_vote_score[data_s$party_vote_score==0] = 5
+data_s$party_vote_score = data_s$party_vote_score - 5
+
+data_s$future_party_vote_score[data_s$future_party_vote_score==0] = 5
+data_s$future_party_vote_score = data_s$future_party_vote_score - 5
+
+## Copy data_s to shift vote scores, this dataset is kept only for visualization purposes for
+## making plots only including individuals who did vote
+data_s_v = data 
+data_s_v$party_vote_score[data_s_v$party_vote_score==0] = NA
+data_s_v$party_vote_score = data_s_v$party_vote_score - 5
+
+data_s_v$future_party_vote_score[data_s_v$future_party_vote_score==0] = NA
+data_s_v$future_party_vote_score = data_s_v$future_party_vote_score - 5
+```
+
+
+### Data Exploration
+
+Next we can look at some basic chart of our data_s, first just looking at the spread of of party vote scores and future party vote scores, note that of the 8081 people, 3406 did not vote and are not included in the corresponding bar graph and 2371 say they plan not to vote and are also not included in that plot.
+
+```{r, echo=FALSE, warning=FALSE}
+data_s |>
+  ggplot() +
+    geom_histogram(binwidth=1, aes(x=party_vote_score))+
+    scale_x_continuous(breaks = -4:4, labels = -4:4) +
+    labs(title = "Party Vote Score", x = "Scores", y = "Frequency") +
+    theme_minimal()
+```
+
+```{r, echo=FALSE, warning=FALSE}
+data_s |>
+  ggplot() +
+    geom_histogram(binwidth=1, aes(x=future_party_vote_score))+
+    scale_x_continuous(breaks = -4:4, labels = -4:4) +
+    labs(title = "Future Party Vote Score", x = "Scores", y = "Frequency") +
+    theme_minimal()
+```
+
+We can see our values are already skewed to the right for both charts, our average about 0.52 for vote score and and 0.56 for future vote score. Just based on that we see a slight shift towards more right parties after Trump's Election but we cannot say if that is statistically significant as it is a small change. Here we can look at both together and see where the people who claim they will vote end up.
+
+
+USE THIS:
+```{r, echo=FALSE, warning=FALSE}
+ggplot() +
+  geom_bar(data = data_s, aes(x = future_party_vote_score, fill = "Future Party Vote Score"), 
+           width = 0.4, position = position_nudge(x = 0.2)) +
+  geom_bar(data = data_s, aes(x = party_vote_score, fill = "Party Vote Score"), 
+           width = 0.4, position = position_nudge(x = -0.2)) +
+  scale_x_continuous(breaks = -4:4, labels = -4:4) +
+  scale_fill_manual(values = c("Future Party Vote Score" = "blue", 
+                               "Party Vote Score" = "orange")) +
+  labs(title = "Comparison of Party Vote Scores", 
+       x = "Scores", 
+       y = "Frequency", 
+       fill = "Score Type") +
+  theme_minimal()
+```
+
+Okay, so now we want to look at how peoples votes change from one election to the next. Let's create a new variable to capture changing votes
+
+```{r}
+data_s$delta_party_vote_score = data_s$future_party_vote_score - data_s$party_vote_score
+data_s_v$delta_party_vote_score = data_s_v$future_party_vote_score - data_s_v$party_vote_score
+```
+```{r, echo=FALSE, warning=FALSE}
+data_s |>
+  ggplot() +
+    geom_histogram(binwidth=1, aes(x=delta_party_vote_score)) +
+    scale_x_continuous(breaks = -9:9, labels = -9:9) +
+    labs(title = "Change in Party Vote Score", x = "Scores", y = "Frequency") +
+    theme_minimal()
+```
+
+Let's omit unchanging votes for better visualization
+```{r, echo=FALSE, warning=FALSE}
+data_s[data_s$delta_party_vote_score != 0,] |>
+  ggplot() +
+    geom_histogram(binwidth=1, aes(x=delta_party_vote_score))+
+    scale_x_continuous(breaks = -9:9, labels = -9:9) +
+    labs(title = "Change in Party Vote Score", x = "Scores", y = "Frequency") +
+    theme_minimal()
+```
+
+It seems we have a pretty normal distribution here. Let's add a direction of change indicator that we can potentially predict and visualize it.
+
+```{r}
+data_s$delta_party_vote_score_direction = ifelse(data_s$delta_party_vote_score>0, 1, ifelse(data_s$delta_party_vote_score==0, 0, -1))
+```
+
+```{r, echo=FALSE, warning=FALSE}
+data_s|>
+  ggplot() +
+    geom_bar(aes(x=delta_party_vote_score_direction))+
+    labs(title = "Direction of Change in Party Vote Score", x = "Scores", y = "Frequency") +
+    theme_minimal()
+```
+
+Now I wonder how well we can predict direction of change of party vote in people that change their vote, to do this I will drop all rows that do not change their vote score and predict on that. We can try predicting on all people afterwards. 
+
+Here are the original and future party vote scores of all the individuals who changed their vote. We can see where they originated from and where they ended up.
+
+```{r, echo=FALSE, warning=FALSE}
+data_s_vote_change = data_s[data_s$delta_party_vote_score != 0,]
+data_s_vote_change_feats = data_s_vote_change |>
+  select(-c("future_party_vote_score", "delta_party_vote_score", "id")) |>
+  na.omit()
+
+data_s_v_vote_change = data_s_v[data_s_v$delta_party_vote_score != 0,]
+data_s_v_vote_change_feats = data_s_v_vote_change |>
+  na.omit()
+```
+
+```{r, echo=FALSE, warning=FALSE}
+data_s_vote_change |>
+  ggplot() +
+    geom_histogram(binwidth=1, aes(x=party_vote_score))+
+    scale_x_continuous(breaks = -4:4, labels = -4:4) +
+    labs(title = "Party Vote Score", x = "Scores", y = "Frequency") +
+    theme_minimal()
+
+data_s_vote_change |>
+  ggplot() +
+    geom_histogram(binwidth=1, aes(x=future_party_vote_score))+
+    scale_x_continuous(breaks = -4:4, labels = -4:4) +
+    labs(title = "Future Party Vote Score", x = "Scores", y = "Frequency") +
+    theme_minimal()
+```
+
+The generate trend seems to be an increase in polarization which voters orginating from more moderate moderns and moving outwards.
+
+### Training Random Forest Models
+
+Here we train a basic random forest to do classification on whether someone who changed their vote voted for a more left or right party.
+
+```{r, echo=FALSE}
+set.seed(1)
+changing_vote_rf <- randomForest(factor(delta_party_vote_score_direction) ~.,
+                 data = data_s_vote_change_feats)
+
+changing_vote_rf
+```
+
+We can see that a basic random forest
+
+```{r}
+importance = as.data.frame(changing_vote_rf$importance)
+importance = importance |> arrange(-MeanDecreaseGini)
+head(importance, 20)
+```
+
+It seems that the party you voted for at first is the best predictor of which direction you will go if you change your vote. Interesting, let's see if we can visualize this relationship. Let's look at some scatters plots (actually lets do density plots) of original party vote score versus future party vote score of people who voted and plan to vote.
+
+
+```{r, warning=FALSE, echo=FALSE}
+data_s_v |>
+  ggplot(aes(x=party_vote_score, y=future_party_vote_score)) +
+  geom_density_2d_filled() +
+  labs(title = "Current vs Future Vote Score for all Voters", x = "Party Vote Score", y = "Future Party Vote Score")
+```
+
+This visualization is only slightly helpful, it just shows us where the clusters of votes are generally because the majority of people did not change their vote, let's look at only voters that changed votes.
+
+
+```{r, warning=FALSE, echo=FALSE}
+data_s_v_vote_change|>
+  ggplot(aes(x=party_vote_score, y=future_party_vote_score)) +
+  geom_density_2d_filled() +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +  # Add y = x line
+  labs(title = "Current vs Future Vote Score (Only voters who changed parties)", x = "Party Vote Score", y = "Future Party Vote Score")
+```
+
+Now this is more interesting, we can see clusters of areas where originally right leaning voters went more left or more right and the same with originally left leaning voters. It is nice to see this with the y=x line plotted because any points before that line are areas where voters went to a relatively more left party and above are where voters went to a relatively more right party. 
+
+Let's see what happens if we tried to predict who will change their vote and in which direction they will go
+
+
+```{r, echo=FALSE}
+data_s_all_vote_feats = data_s |>
+  select(-c("future_party_vote_score", "delta_party_vote_score", "id")) |>
+  na.omit()
+
+all_vote_rf <- randomForest(factor(delta_party_vote_score_direction) ~.,
+                 data = data_s_all_vote_feats)
+
+all_vote_rf
+```
+
+This makes the problem much more difficult and potentially interesting but we will stick to just trying to understand the people who did change their vote. If someone is changing their vote, what could predict if they are going to vote for a more left or more right leaning party.
+
+
+```{r, echo=FALSE}
+data_s_all_vote_feats$delta_party_vote_score_bin = (data_s_all_vote_feats$delta_party_vote_score!=0)
+
+bin_change_vote_rf <- randomForest(factor(delta_party_vote_score_bin) ~.,
+                 data = data_s_all_vote_feats |>
+                   select(-c("delta_party_vote_score_direction"))
+                 )
+
+bin_change_vote_rf
+```
+
