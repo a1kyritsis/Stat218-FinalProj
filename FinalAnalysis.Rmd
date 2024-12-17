@@ -160,7 +160,7 @@ We see that the new features capture the overall trends of the existing features
 
 ## Investigation
 
-We now construct the features of interested. $\texttt{vote_delta}$ records if an individual decided to change their vote to a more right or left leaning party with respect to their historic vote. $\texttt{direction}$ is an indicator corresponding to whether the shift was rightward $0$ or leftward $1$:
+We now construct the features of interested. $\texttt{vote_delta}$ records if an individual decided to change their vote to a more right or left leaning party with respect to their historic vote. $\texttt{direction}$ is an indicator corresponding to whether the shift was rightward $1$ or leftward $0$:
 
 ```{r}
 P$vote_delta <- P$future_party_vote_score - P$party_vote_score
@@ -237,7 +237,7 @@ P[!(P$party_vote_score == 5 | P$future_party_vote_score == 5),] |>
   labs(title = "Current vs Future Vote Score\n(Switch Votes)", x = "Party Vote Score", y = "Future Party Vote Score")
 ```
 
-We observe that a large portion of non-voters plan to vote in the next election cycle. Interestingly, for those individuals who did/will vote in both elections, we the distribution becomes less extreme. Given the cardinality of the feature space, feature importance is most easily determined algorithmically:
+We observe that a large portion of non-voters plan to vote in the next election cycle. Interestingly, for those individuals who did/will vote in both elections, the distribution becomes less extreme. Given the cardinality of the feature space, feature importance is most easily determined algorithmically:
 
 ```{r, results = 'hide'}
 features <- c("direction", "party_vote_score", "ideology_score", "political_activity", "age", "political_view", "country_code", "income_net_monthly", "media_tv_hours", "settlment_size", "media_radio_hours") # NOTE this were determined after running the models, but are included here so things run faster.
@@ -488,7 +488,7 @@ For individuals who planed to change their vote after the $2016$ election cycle,
 
 Further, we found that features associated with ideology and political activity contributed most significantly to the classification task. Interestingly, demographic features ended being second most important as oppose to media consumption ones. This may indicate that material circumstance incite voting activity and change over media radicalization.
 
-The random forest model had a slightly higher accuracy and $F1$ score across both classes indicating better holistic performance. The optimal tuning parameters implicate a complex relationship in the data. Out of all $SVM$'s, the radial kernel performed best which suggests a non-linear relationship in the data. However, we note that all models were able to achieve north of $70\%$ accuracy, with minimal tuning. This analysis suggests that broader trends may be modeled rather simply, whereas a more complex approach is required to capture the misclassified observations. Future research would entail evaluating these models to different voter demographics and investigating the source of data set complexity.
+The random forest model had a slightly higher accuracy and $F1$ score across both classes indicating better holistic performance. The optimal tuning parameters implicate a complex relationship in the data. Out of all $SVM$'s, the radial kernel performed best which suggests a non-linear relationship in the data. However, we note that all models were able to achieve north of $70\%$ accuracy, with minimal tuning. This analysis suggests that broader trends may be modeled rather simply, whereas a more complex approach is required to capture the misclassified observations. Future research would entail evaluating these models on different voter demographics and investigating the source of data set complexity.
 
 
 # Appendix
